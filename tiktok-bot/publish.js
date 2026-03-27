@@ -8,28 +8,41 @@ const { Resend } = require('resend');
 const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { GoogleAIFileManager } = require("@google/generative-ai/server");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-
 require('dotenv').config();
 
-// ==================== FUNCIONES AUXILIARES ====================
-
+// --- NUEVO: Función para escapar caracteres HTML conflictivos ---
 function escapeHTML(str) {
   if (!str) return '';
-  return str.replace(/[&<>'"]/g, tag => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-  }[tag] || tag));
+  return str.replace(/[&<>'"]/g,
+    tag => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;'
+    }[tag] || tag)
+  );
 }
 
+// 🤖 Telegram Bot alerts (configured via admin panel)
 async function sendTelegramAlert(videoId, errorMessage, errorImagePath) {
   try {
     const telegramDoc = await admin.firestore().collection('admin_settings').doc('telegram').get();
-    if (!telegramDoc.exists || !telegramDoc.data().token) return;
+
+    if (!telegramDoc.exists || !telegramDoc.data().token) {
+      console.log('⚠️  Telegram alerts not configured, skipping notification');
+      return;
+    }
 
     const { token, chatIds } = telegramDoc.data();
-    if (!chatIds?.length) return;
+    if (!chatIds || chatIds.length === 0) {
+      console.log('⚠️  No Telegram chat IDs configured');
+      return;
+    }
 
-    const safeError = escapeHTML(errorMessage);
-    const caption = `🚨 <b>carliyoelbot Error</b>\n\n<b>Video ID:</b> ${escapeHTML(videoId)}\n<b>Error:</b> ${safeError}\n<b>Hora:</b> ${new Date().toISOString()}`;
+    const safeErrorMessage = escapeHTML(errorMessage);
+    const telegramApiUrl = `https://api.telegram.org/bot${token}/sendPhoto`;
+    const caption = `🚨 <b>carliyoelbot Error</b>\n\n<b>Video ID:</b> ${escapeHTML(videoId)}\n<b>Error:</b> ${safeErrorMessage}\n<b>Time:</b> ${new Date().toISOString()}`;
 
     for (const chatId of chatIds) {
       try {
@@ -39,25 +52,27 @@ async function sendTelegramAlert(videoId, errorMessage, errorImagePath) {
         form.append('parse_mode', 'HTML');
 
         if (await fs.pathExists(errorImagePath)) {
-          form.append('photo', fs.createReadStream(errorImagePath));
+          const fileStream = fs.createReadStream(errorImagePath);
+          form.append('photo', fileStream);
         }
 
-        await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, form, {
+        await axios.post(telegramApiUrl, form, {
           headers: form.getHeaders()
         });
-      } catch (e) {
-        console.warn(`Telegram alert failed for chat ${chatId}:`, e.message);
+
+        console.log(`✅ Telegram alert sent to chat ${chatId}`);
+      } catch (chatError) {
+        console.warn(`❌ Failed to send Telegram alert to chat ${chatId}:`, chatError.response ? chatError.response.data : chatError.message);
       }
     }
   } catch (err) {
-    console.warn('Telegram alert error:', err.message);
+    console.warn('⚠️  Telegram alert error:', err.message);
   }
 }
 
-// ==================== INICIALIZACIÓN ====================
-
+// Inicialización de Firebase
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("Falta FIREBASE_SERVICE_ACCOUNT");
+  console.error("Falta FIREBASE_SERVICE_ACCOUNT en el entorno.");
   process.exit(1);
 }
 
@@ -65,7 +80,6 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 if (!admin.apps.length) {
   admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 }
-
 const db = admin.firestore();
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const fileManager = process.env.GEMINI_API_KEY ? new GoogleAIFileManager(process.env.GEMINI_API_KEY) : null;
@@ -73,27 +87,29 @@ const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GE
 
 (async () => {
   const MAX_ATTEMPTS = 5;
+  // 🌟 NUEVO: Variable fuera del bucle para recordar el vídeo en caso de fallo ajeno
   let currentVideoDoc = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    console.log(`\n=== INTENTO ${attempt}/${MAX_ATTEMPTS} ===`);
-
+    console.log(`\n=== INICIANDO INTENTO ${attempt}/${MAX_ATTEMPTS} ===`);
     let browser;
     let page;
     let videoId = null;
-    let videoData = null;
     let userEmail = null;
+    let userName = null;
+    let videoData = null;
 
     try {
-      // Selección del vídeo
+      // 🌟 NUEVO: Si no tenemos un vídeo retenido de un intento anterior, sacamos uno nuevo
       if (!currentVideoDoc) {
         const forceVideoId = process.env.TARGET_VIDEO_ID;
 
         if (forceVideoId) {
-          console.log(`[FORZADO] Usando vídeo: ${forceVideoId}`);
+          console.log(`[MODO FORZADO] Buscando vídeo específico: ${forceVideoId}`);
           currentVideoDoc = await db.collection('video_submissions').doc(forceVideoId).get();
-          if (!currentVideoDoc.exists) throw new Error("Vídeo forzado no existe");
+          if (!currentVideoDoc.exists) { console.log("El vídeo forzado no existe."); process.exit(1); }
         } else {
+          console.log("Modo Sorteo: Buscando ganador aleatorio...");
           const randomVal = Math.random();
           let snapshot = await db.collection('video_submissions')
             .where('status', '==', 'queued_for_tiktok')
@@ -111,47 +127,45 @@ const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GE
               .get();
           }
 
-          if (snapshot.empty) {
-            console.log("Urna vacía. Finalizando.");
-            process.exit(0);
-          }
+          if (snapshot.empty) { console.log("Urna vacía. Apagando."); process.exit(0); }
           currentVideoDoc = snapshot.docs[0];
         }
       } else {
-        console.log(`♻️ Reintentando el mismo vídeo: ${currentVideoDoc.id}`);
+        console.log(`♻️ Reintentando el MISMO vídeo por fallo de sistema anterior: ${currentVideoDoc.id}`);
       }
 
-      const videoDoc = currentVideoDoc;
+      // Asignamos los datos del vídeo retenido o extraído
+      let videoDoc = currentVideoDoc;
       videoId = videoDoc.id;
       videoData = videoDoc.data();
 
-      // Obtener email del usuario
-      const userSnap = await db.collection('users').doc(videoData.userId).get();
-      if (userSnap.exists) userEmail = userSnap.data().email;
+      const userSnapshot = await db.collection('users').doc(videoData.userId).get();
+      if (userSnapshot.exists) {
+        userEmail = userSnapshot.data().email;
+        userName = userSnapshot.data().displayName;
+      }
 
-      console.log(`Procesando vídeo: ${videoId} - "${videoData.title}"`);
-
+      console.log(`Procesando vídeo: ${videoId}`);
       await videoDoc.ref.update({
         status: 'publishing',
         lastAttemptAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
-      // ==================== COOKIES TIKTOK ====================
-      const tiktokSnap = await db.collection('tiktok_accounts').doc('main').get();
-      if (!tiktokSnap.exists || !tiktokSnap.data().cookies) throw new Error("Faltan cookies de TikTok");
+      const tiktokSnapshot = await db.collection('tiktok_accounts').doc('main').get();
+      if (!tiktokSnapshot.exists || !tiktokSnapshot.data().cookies) throw new Error("Faltan cookies de TikTok.");
 
-      const rawCookies = JSON.parse(tiktokSnap.data().cookies);
-      const sanitizedCookies = rawCookies.map(c => {
-        const cookie = { ...c };
-        if (cookie.sameSite && !['Strict', 'Lax', 'None'].includes(cookie.sameSite)) delete cookie.sameSite;
-        return cookie;
+      let rawCookies = JSON.parse(tiktokSnapshot.data().cookies);
+      const sanitizedCookies = rawCookies.map(cookie => {
+        const c = { ...cookie };
+        if (c.sameSite && !['Strict', 'Lax', 'None'].includes(c.sameSite)) delete c.sameSite;
+        return c;
       });
 
       const videoPath = path.join('/tmp', `${videoId}.mp4`);
 
-      // Descargar vídeo si no existe
+      // Solo descargamos si el archivo no existe (por si es un reintento)
       if (!fs.existsSync(videoPath)) {
-        console.log("Descargando vídeo desde R2...");
+        console.log(`Descargando vídeo...`);
         const response = await axios({
           method: 'GET',
           url: videoData.videoUrl,
@@ -160,90 +174,121 @@ const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GE
           timeout: 120000
         });
 
+        const contentType = response.headers['content-type'] || '';
+        if (!contentType.includes('video/')) {
+          throw new Error(`Invalid content type: ${contentType}. Expected video/*`);
+        }
         const writer = fs.createWriteStream(videoPath);
         response.data.pipe(writer);
-        await new Promise((resolve, reject) => {
-          writer.on('finish', resolve);
-          writer.on('error', reject);
-        });
+        await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
+      } else {
+        console.log(`El vídeo ya está en /tmp. Saltando descarga.`);
       }
 
-      // ==================== GEMINI - ANÁLISIS MUY ESTRICTO ====================
-      if (!process.env.TARGET_VIDEO_ID && fileManager && genAI) {
-        console.log("🔍 Analizando vídeo con Gemini (modo ULTRA ESTRICTO)...");
+      // --- GEMINI MODERATION ---
+      if (process.env.TARGET_VIDEO_ID) {
+        console.log("⚡ [MODO FORZADO] Vídeo seleccionado manualmente. Saltando el filtro de IA...");
+      } else if (fileManager && genAI) {
+        console.log("Subiendo archivo a Gemini para moderación...");
+        let uploadResult;
+        try {
+          uploadResult = await fileManager.uploadFile(videoPath, {
+            mimeType: "video/mp4",
+            displayName: videoId,
+          });
 
-        const uploadResult = await fileManager.uploadFile(videoPath, {
-          mimeType: "video/mp4",
-          displayName: videoId,
-        });
+          let file = await fileManager.getFile(uploadResult.file.name);
+          process.stdout.write("Esperando a que el archivo esté procesado en Gemini");
+          while (file.state === "PROCESSING") {
+            process.stdout.write(".");
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            file = await fileManager.getFile(uploadResult.file.name);
+          }
+          console.log("");
 
-        let file = await fileManager.getFile(uploadResult.file.name);
-        while (file.state === "PROCESSING") {
-          await new Promise(r => setTimeout(r, 4000));
-          file = await fileManager.getFile(uploadResult.file.name);
+          if (file.state === "FAILED") {
+            throw new Error("El procesamiento de Gemini falló (FAILED statte).");
+          }
+
+          console.log(`Estado en Gemini: ACTIVE. Analizando con gemini-2.5-flash...`);
+          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+          const prompt = "Analiza este vídeo (imagen y audio). ¿Es apto para TikTok? Busca desnudez, violencia, lenguaje de odio o drogas. Responde estrictamente con 'APROBADO' o 'RECHAZADO' y una breve razón.";
+
+          // 🌟 NUEVO: Micro-reintentos por si Google devuelve 503
+          let aiResponseText = null;
+          let geminiAttempts = 0;
+          const MAX_GEMINI = 3;
+
+          while (geminiAttempts < MAX_GEMINI) {
+            try {
+              geminiAttempts++;
+              const aiResult = await model.generateContent([
+                { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } },
+                { text: prompt },
+              ]);
+              aiResponseText = aiResult.response.text();
+              break; // Éxito, salimos del bucle while
+            } catch (apiError) {
+              console.warn(`⚠️ Error temporal en API Gemini (Intento ${geminiAttempts}): ${apiError.message}`);
+              if (geminiAttempts >= MAX_GEMINI) throw apiError;
+              console.log("⏳ Esperando 10 segundos por saturación de Google antes de reintentar...");
+              await new Promise(r => setTimeout(r, 10000));
+            }
+          }
+
+          console.log(`Respuesta de IA: ${aiResponseText}`);
+
+          // Cleaner
+          await fileManager.deleteFile(uploadResult.file.name).catch(() => { });
+
+          if (aiResponseText.includes("RECHAZADO")) {
+            console.log(`❌ IA rechazó el vídeo (${videoId}). Descartando y pasando al siguiente.`);
+            await videoDoc.ref.update({
+              status: 'rejected_by_ai',
+              lastError: aiResponseText
+            });
+            await sendTelegramAlert(videoId, `Vídeo rechazado por IA. Razón: ${aiResponseText}`, videoPath);
+            await fs.unlink(videoPath).catch(() => console.log("No se pudo borrar video de /tmp"));
+
+            // 🌟 NUEVO: Vaciamos el retenedor para que saque OTRO vídeo distinto en la siguiente vuelta
+            currentVideoDoc = null;
+
+            if (attempt < MAX_ATTEMPTS) {
+              continue;
+            } else {
+              console.log("Alcanzados los máximos intentos.");
+              process.exit(1);
+            }
+          } else {
+            console.log("✅ IA aprobó el vídeo. Continuando a la publicación.");
+          }
+        } catch (geminiError) {
+          throw new Error(`Fallo durante la moderación con Gemini: ${geminiError.message}`);
         }
-
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-        const strictPrompt = `Analiza este vídeo con atención para publicarlo en TikTok.
-
-Rechaza el vídeo SI contiene cualquiera de estas cosas:
-- Watermarks, logos, círculos superpuestos, iconos o texto flotante (especialmente círculos con texto como "to bi monstrar esto", "sígueme", etc.)
-- Contenido claramente copiado o reutilizado de otras cuentas (duplicado visual)
-- Desnudez, violencia gráfica, lenguaje de odio, promoción de drogas/alcohol/tabaco
-- Contenido ilegal, estafas o spam
-
-Sé especialmente estricto con:
-- Cualquier logo, marca de agua o elemento gráfico superpuesto en el vídeo
-- Texto que aparece en la pantalla de forma permanente o semi-permanente
-- Círculos, bordes o elementos que parezcan añadidos después de grabar
-
-NO rechaces por:
-- Vídeos cortos, simples o con poca edición
-- Calidad media o baja (siempre que no tenga watermark)
-- Contenido repetitivo pero original
-
-Responde **únicamente** con uno de estos formatos exactos:
-
-APROBADO | [razón breve opcional]
-RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
-
-        const aiResult = await model.generateContent([
-          { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } },
-          { text: strictPrompt }
-        ]);
-
-        const aiText = aiResult.response.text().trim();
-        console.log(`Gemini: ${aiText}`);
-
-        await fileManager.deleteFile(uploadResult.file.name).catch(() => { });
-
-        if (aiText.toUpperCase().includes("RECHAZADO")) {
-          console.log(`❌ RECHAZADO por IA estricta`);
-          await videoDoc.ref.update({ status: 'rejected_by_ai', lastError: aiText });
-          await sendTelegramAlert(videoId, `Rechazado por IA: ${aiText}`, videoPath);
-          await fs.unlink(videoPath).catch(() => { });
-          currentVideoDoc = null;
-          continue;
-        }
+      } else {
+        console.warn("⚠️ GEMINI_API_KEY no configurado, omitiendo moderación por IA.");
       }
 
-      // ==================== PLAYWRIGHT - PUBLICACIÓN ====================
+      // --- PLAYWRIGHT UPLOAD ---
       browser = await chromium.launch({ headless: true });
       const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/122.0.0.0 Safari/537.36'
       });
       await context.addCookies(sanitizedCookies);
       page = await context.newPage();
 
+      console.log("Navegando a TikTok...");
       await page.goto('https://www.tiktok.com/tiktokstudio/upload', { waitUntil: 'load', timeout: 90000 });
 
-      // Subida del vídeo
+      if (page.url().includes('login')) throw new Error("Sesión caducada.");
+
+      console.log("Subiendo archivo...");
       const fileInput = page.locator('input[type="file"]');
+      await fileInput.waitFor({ state: 'attached', timeout: 60000 });
       await fileInput.setInputFiles(videoPath);
 
-      // Rellenar caption
+      console.log("Rellenando descripción...");
       const editor = page.locator('div[contenteditable="true"], textarea').first();
       await editor.waitFor({ state: 'visible', timeout: 60000 });
       await editor.focus();
@@ -252,17 +297,24 @@ RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
 
       const fullCaption = `${videoData.title || ""}\n\n#somoslosdertisto`.trim();
       const parts = fullCaption.split(/([@#][a-zA-Z0-9_áéíóúÁÉÍÓÚñÑ]+)/g);
+
       let hasWrittenAnything = false;
 
       for (let i = 0; i < parts.length; i++) {
         let part = parts[i];
         if (!part) continue;
+
         const isTag = part.startsWith('@') || part.startsWith('#');
+
         if (!isTag) {
           part = part.trim().replace(/\s+/g, ' ');
           if (!part) continue;
         }
-        if (hasWrittenAnything) await page.keyboard.type(' ');
+
+        if (hasWrittenAnything) {
+          await page.keyboard.type(' ');
+        }
+
         if (isTag) {
           console.log(`Escribiendo tag dinámico: ${part}`);
           await page.keyboard.type(part, { delay: 150 });
@@ -272,133 +324,106 @@ RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
         } else {
           await page.keyboard.type(part, { delay: 20 });
         }
+
         hasWrittenAnything = true;
       }
 
-      // ==================== ESPERA DE PROCESAMIENTO ====================
-      console.log("Esperando a que TikTok termine de procesar el vídeo y el check de copyright...");
-      // Esperamos a que aparezca algún indicativo de que el check ha terminado o el botón esté listo
-      await Promise.race([
-        page.waitForSelector('text=No issues found, text=No se han detectado problemas, text=Check complete', { timeout: 60000 }),
-        page.waitForTimeout(45000) // Backup de 45s si no detecta el texto
-      ]).catch(() => {});
+      console.log("Dando 30 segundos a TikTok para procesar...");
+      await page.waitForTimeout(30000);
 
-      const postBtn = page.locator('button:has-text("Publicar"), button:has-text("Post")').filter({ has: page.locator('visible=true') }).last();
-      
-      console.log("Esperando a que el botón de publicar esté habilitado...");
-      await postBtn.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
-      
-      // Intentar asegurar que no está deshabilitado
-      let isEnabled = false;
-      for(let i=0; i<10; i++) {
-        const disabled = await postBtn.getAttribute('disabled');
-        if (disabled === null) { isEnabled = true; break; }
-        await page.waitForTimeout(2000);
+      const postBtn = page.locator('button:has-text("Publicar"), button:has-text("Post")').last();
+      await postBtn.scrollIntoViewIfNeeded();
+
+      console.log("Haciendo clic inicial en Publicar...");
+      try {
+        await postBtn.click({ timeout: 5000, force: true });
+      } catch (e) {
+        console.log("Clic bloqueado inicialmente, buscando obstáculos...");
       }
-      if (!isEnabled) console.log("Aviso: El botón parece seguir deshabilitado, pero intentaremos pulsar.");
 
-      console.log("Haciendo clic en Publicar...");
-      await postBtn.click({ force: true }).catch(e => console.error("Error al hacer clic:", e.message));
-      
-      // Captura inmediata post-clic para ver si aparece algún error rápido o popup
-      await page.waitForTimeout(2000);
-      await page.screenshot({ path: `post-click-${videoId}.png` }).catch(() => {});
-
-      // ==================== MEJOR DETECCIÓN DE RESTRICCIÓN TIKTOK ====================
-      console.log("Esperando resultado de publicación (máx 90 segundos)...");
-
-      let isPublished = false;
-      let tiktokRejected = false;
       const startTime = Date.now();
-      const maxWait = 120000; // Aumentado a 120s
+      const maxWaitTimeMs = 120000;
+      let isPublished = false;
+      let isRestricted = false; // [NUEVO] Flag para detectar contenido restringido
+      const successSelectors = ['.TUXToast-content', 'text=Gestionar', 'text=Manage', 'text=publicado', 'text=uploaded'].join(', ');
 
-      while (Date.now() - startTime < maxWait) {
-        const timePassed = Math.floor((Date.now() - startTime) / 1000);
-        const currentUrl = page.url();
-        console.log(`   Escaneando pantalla (${timePassed}s) - URL: ${currentUrl.substring(0, 50)}...`);
+      const popupKillList = [
+        'Got it', 'Entendido',
+        'Turn on', 'Activar',
+        'Continuar', 'Continue',
+        'Confirmar', 'Confirm',
+        'Aceptar', 'Accept',
+        'Ignorar', 'Ignore'
+      ];
 
-        // 1. Éxito normal (SOLO vía URL por petición del usuario para evitar falsos positivos)
-        if (currentUrl.includes('/tiktokstudio/content') || currentUrl.includes('/profile') || currentUrl.includes('/video/')) {
-          console.log("✅ ¡Redirección de éxito detectada via URL!");
+      while (Date.now() - startTime < maxWaitTimeMs) {
+        console.log(`Escanenando pantalla (${Math.floor((Date.now() - startTime) / 1000)}s)...`);
+
+        if (page.url().includes('/tiktokstudio/content') || await page.locator(successSelectors).isVisible({ timeout: 2000 }).catch(() => false)) {
+          console.log("¡Éxito detectado!");
           isPublished = true;
           break;
         }
 
-        // Loguear toasts para debug por si hay errores, pero sin confirmar éxito por texto
-        const toastVisible = await page.locator('.TUXToast-content, .tux-toast').isVisible({ timeout: 500 }).catch(() => false);
-        if (toastVisible) {
-          const toastText = await page.locator('.TUXToast-content, .tux-toast').innerText().catch(() => "");
-          console.log(`   Toast en pantalla: "${toastText}"`);
+        // --- NUEVO: Detección de aviso de restricción/violación ---
+        const restrictionText = [
+          'text=Content may be restricted',
+          'text=Violation reason',
+          'text=Contenido restringido',
+          'text=Motivo de la infracción',
+          'text=Unoriginal, low-quality',
+          'text=restringido'
+        ].join(', ');
+
+        if (await page.locator(restrictionText).isVisible({ timeout: 1000 }).catch(() => false)) {
+          console.log("🚨 ¡AVISO DE RESTRICCIÓN DETECTADO POR TIKTOK! Marcando como rechazado.");
+          isRestricted = true;
+          break;
         }
 
-        // 2. DETECCIÓN DE RESTRICCIÓN O ERRORES
-        const restrictionTexts = [
-          'Content may be restricted',
-          'Unoriginal, low-quality, and QR code content',
-          'Violation reason',
-          'Some of the potential violations found',
-          'Copyright infringement',
-          'Something went wrong',
-          'Upload failed',
-          'Couldn\'t post video'
-        ];
-
-        for (const text of restrictionTexts) {
-          const found = await page.locator(`text=${text}`).isVisible({ timeout: 500 }).catch(() => false);
-          if (found) {
-            tiktokRejected = true;
-            console.log(`🚫 Detectado problema/restricción: "${text}"`);
-            break;
+        let handledAnyPopupInThisPass = false;
+        for (const text of popupKillList) {
+          const btn = page.locator(`button:has-text("${text}")`).last();
+          if (await btn.isVisible().catch(() => false)) {
+            console.log(`¡TRAMPA DETECTADA! Botón "${text}" visible. Aniquilándolo...`);
+            await btn.click({ force: true }).catch(() => { });
+            await page.waitForTimeout(1500);
+            handledAnyPopupInThisPass = true;
           }
         }
 
-        if (tiktokRejected) break;
-
-        // Botón "Post anyway" o "Publicar de todos modos" (a veces aparece en popups)
-        const postAnyway = page.locator('button:has-text("Post anyway"), button:has-text("Publicar de todos modos")').last();
-        if (await postAnyway.isVisible({ timeout: 500 }).catch(() => false)) {
-          console.log("⚠️ Apareció modal de advertencia, pulsando 'Post anyway'...");
-          await postAnyway.click({ force: true }).catch(() => {});
+        if (!handledAnyPopupInThisPass) {
+          await page.keyboard.press('Escape');
           await page.waitForTimeout(2000);
-          continue;
         }
 
-        // Cerrar popups molestos
-        const popupTexts = [
-          'Got it', 'Entendido', 'Turn on', 'Activar', 'Continuar', 'Continue', 
-          'Confirmar', 'Aceptar', 'Ignore', 'Not now', 'No ahora', 'Close', 'Cerrar'
-        ];
-        for (const txt of popupTexts) {
-          const btn = page.locator(`button:has-text("${txt}")`).last();
-          if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
-            await btn.click({ force: true }).catch(() => {});
-            await page.waitForTimeout(1200);
-          }
+        if (await postBtn.isVisible() && !(await postBtn.isDisabled())) {
+          await postBtn.click({ timeout: 5000, force: true }).catch(() => { });
+          await page.waitForTimeout(2000);
         }
-
-        await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(2500);
       }
 
-      // ==================== MANEJO DEL RESULTADO ====================
-      if (tiktokRejected) {
-        console.log("🚫 TikTok rechazó el vídeo por 'Unoriginal, low-quality...'");
+      if (!isPublished && !isRestricted) throw new Error("No se pudo confirmar la publicación tras 2 minutos.");
+
+      // --- NUEVO: Manejo específico de RESTRICCIÓN ---
+      if (isRestricted) {
+        console.warn(`❌ TikTok rechazó el vídeo (${videoId}) por contenido restringido/originalidad.`);
+
+        // Tomamos captura del video rechazado para pruebas
+        await page.screenshot({ path: `video-restringido-${videoId}.png`, fullPage: true }).catch(() => { });
 
         await videoDoc.ref.update({
           status: 'rejected_by_tiktok',
-          lastError: 'TikTok: Unoriginal, low-quality, and QR code content'
+          lastError: "Rechazado por TikTok: Contenido no original, baja calidad o QR."
         });
 
-        // Capturar pantalla para debug
-        const screenshotPath = `tiktok-restriction-${videoId}.png`;
-        await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+        await sendTelegramAlert(videoId, "🚨 TikTok detectó contenido restringido/no original. Vídeo descartado.", `video-restringido-${videoId}.png`);
 
-        await sendTelegramAlert(videoId, "TikTok rechazó el vídeo: Unoriginal, low-quality, and QR code content", screenshotPath);
-
-        // Eliminar de R2
+        // Borrar de R2 si existe
         if (process.env.R2_ACCOUNT_ID && videoData.videoUrl) {
           try {
-            const s3 = new S3Client({
+            console.log("[R2] Eliminando archivo rechazado por TikTok...");
+            const s3Client = new S3Client({
               region: "auto",
               endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
               credentials: {
@@ -407,27 +432,26 @@ RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
               },
               forcePathStyle: true,
             });
-            const key = videoData.videoUrl.split('/').slice(-2).join('/');
-            await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
-            console.log(`[R2] Archivo eliminado: ${key}`);
-          } catch (e) {
-            console.error("Error eliminando de R2:", e.message);
-          }
+            const videoKey = videoData.videoUrl.split('/').slice(-2).join('/');
+            await s3Client.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: videoKey }));
+            console.log(`[R2] Archivo ${videoKey} eliminado con éxito.`);
+          } catch (r2Error) { console.error("[R2] Error al borrar el archivo rechazado:", r2Error.message); }
         }
 
-        currentVideoDoc = null;
+        await fs.unlink(videoPath).catch(() => console.log("No se pudo borrar video de /tmp"));
         if (browser) await browser.close();
-        continue;   // ← Pasa al siguiente vídeo
+
+        // Vaciamos el retenedor para que saque OTRO vídeo distinto y continuamos el bucle de reintentos
+        currentVideoDoc = null;
+        if (attempt < MAX_ATTEMPTS) {
+          console.log("⏳ Saltando al siguiente vídeo de la cola...");
+          continue;
+        } else {
+          console.log("Alcanzados los máximos intentos tras rechazo.");
+          process.exit(1);
+        }
       }
 
-      if (!isPublished) {
-        throw new Error("No se pudo confirmar la publicación ni la restricción tras 90 segundos.");
-      }
-
-      // ==================== ÉXITO ====================
-      console.log("✅ Vídeo publicado con éxito!");
-
-      // Extraer tiktokVideoId
       let tiktokVideoId = null;
       try {
         const currentUrl = page.url();
@@ -439,17 +463,22 @@ RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
         console.log("Could not extract TikTok video ID, continuing...");
       }
 
-      await videoDoc.ref.update({
+      const updateData = {
         status: 'published',
         publishedAt: admin.firestore.FieldValue.serverTimestamp(),
-        tiktokVideoId: tiktokVideoId || admin.firestore.FieldValue.delete(),
         lastError: admin.firestore.FieldValue.delete()
-      });
+      };
 
-      // Eliminar de R2 tras éxito
+      if (tiktokVideoId) {
+        updateData.tiktokVideoId = tiktokVideoId;
+      }
+
+      await videoDoc.ref.update(updateData);
+
       if (process.env.R2_ACCOUNT_ID && videoData.videoUrl) {
         try {
-          const s3 = new S3Client({
+          console.log("[R2] Iniciando eliminación del archivo original...");
+          const s3Client = new S3Client({
             region: "auto",
             endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
             credentials: {
@@ -458,14 +487,21 @@ RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
             },
             forcePathStyle: true,
           });
-          const key = videoData.videoUrl.split('/').slice(-2).join('/');
-          await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
-          console.log(`[R2] Archivo eliminado tras éxito: ${key}`);
-        } catch (e) { console.error("Error eliminando de R2:", e.message); }
+
+          const videoKey = videoData.videoUrl.split('/').slice(-2).join('/');
+
+          await s3Client.send(new DeleteObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: videoKey,
+          }));
+          console.log(`[R2] Archivo ${videoKey} eliminado con éxito de Cloudflare.`);
+        } catch (r2Error) {
+          console.error("[R2] Error al borrar el archivo (el vídeo sigue en TikTok):", r2Error.message);
+        }
       }
 
-      // Enviar email a través de Resend
-      if (userEmail && resend) {
+      if (userEmail && process.env.RESEND_API_KEY) {
+        console.log(`Enviando email de 'published' a ${userEmail}`);
         const publicRef = await db.collection('public_settings').doc('tiktok').get();
         const tiktokUsername = publicRef.data()?.username || 'carliyoelbot';
         const tiktokUrl = `https://www.tiktok.com/@${tiktokUsername.replace('@', '')}`;
@@ -493,38 +529,40 @@ RECHAZADO | [explicación clara del motivo, menciona si hay watermark/logo]`;
               </div>
             </div>
           `
-        }).catch(e => console.error("Error enviando email:", e));
+        }).catch(e => console.error("Error enviando email definitivo:", e));
       }
 
-      currentVideoDoc = null;
+      console.log("¡Éxito total en la publicación!");
       if (browser) await browser.close();
       process.exit(0);
 
     } catch (error) {
-      console.error(`Error en intento ${attempt}:`, error.message);
+      console.error(`Error fatal en intento ${attempt}:`, error.message);
+      if (page) await page.screenshot({ path: `error-pantalla-intento-${attempt}.png`, fullPage: true }).catch(() => { });
 
-      const screenshotPath = `error-intento-${attempt}.png`;
-      if (page) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => { });
-
-      await sendTelegramAlert(videoId || 'unknown', error.message, screenshotPath);
+      try {
+        await sendTelegramAlert(videoId || 'Unknown', error.message, `error-pantalla-intento-${attempt}.png`);
+      } catch (e) {
+        console.error("Fallo crítico en Telegram:", e.message);
+      }
 
       if (videoId) {
         await db.collection('video_submissions').doc(videoId).update({
           status: 'queued_for_tiktok',
           attempts: admin.firestore.FieldValue.increment(1),
           lastError: error.message
-        }).catch(() => { });
+        }).catch(e => console.error("Error actualizando estado en Firestore:", e.message));
       }
 
       if (browser) await browser.close().catch(() => { });
 
       if (attempt === MAX_ATTEMPTS) {
-        console.error("Máximos intentos alcanzados. Finalizando.");
+        console.error("Se alcanzaron los intentos máximos. Abortando script por hoy.");
         process.exit(1);
+      } else {
+        console.log("Reintentando con una nueva extracción de urna...");
+        await new Promise(r => setTimeout(r, 3000));
       }
-
-      currentVideoDoc = null;
-      await new Promise(r => setTimeout(r, 5000));
     }
-  }
+  } // fin del for
 })();
