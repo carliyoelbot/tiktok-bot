@@ -578,6 +578,12 @@ RAZÓN: (explicación técnica de 1 línea en español)`;
       }
 
       console.log("¡Éxito total en la publicación!");
+      // 🔴 NUEVO: Avisar a Firestore de que el bot de publicación HA ARRANCADO
+      console.log("Notificando a Firestore: bot_status = idle");
+      await db.doc('system_stats/counters').set({
+        bot_status: 'idle'
+      }, { merge: true }).catch(e => console.error("Error al setear bot status running:", e));
+
       if (browser) await browser.close();
       process.exit(0);
 
