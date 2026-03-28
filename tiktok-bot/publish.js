@@ -194,15 +194,23 @@ const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GE
 
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-        const prompt = `Eres moderador de TikTok 2026 con sentido del humor. 
-Analiza este vídeo (imagen + audio). 
-Reglas FLEXIBLES:
-- MEMES, parodias, humor absurdo, edits locos o baja calidad → APROBADO si no viola normas graves.
-- PROHIBIDO: desnudez, violencia real, odio, acoso, drogas, maltrato animal, logos claros de Instagram/Reels/Kwai/Twitter.
+        const prompt = `Eres el moderador principal y ESTRICTO de una plataforma de vídeos. 
+Tu trabajo es mantener la plataforma 100% segura y limpia. Analiza este vídeo (imagen + audio).
+
+MOTIVOS DE RECHAZO DIRECTO (Rechaza si detectas ALGO de esto):
+1. SPAM: Códigos de descuento (Shein, Temu, etc.), venta de productos, o autopromoción descarada.
+2. GORE/SANGRE: Procedimientos médicos, órganos, heridas, o fluidos corporales (incluso si es "educativo").
+3. PELIGRO: Peleas (incluso fingidas o jugando), llaves de lucha, conducción temeraria, o retos virales.
+4. TOXICIDAD: Odio, acoso, insultos graves o discriminación.
+5. PROHIBIDOS CLÁSICOS: Desnudez, violencia real, drogas, maltrato animal.
+6. MARCAS DE AGUA: Logos visibles de Instagram, Reels, Kwai o Twitter.
+
+EXCEPCIÓN: Bailes, gameplays, memes inofensivos y humor absurdo están APROBADOS siempre que no toquen las reglas anteriores.
+Ante la duda de si algo es peligroso o spam, RECHÁZALO.
 
 Responde ÚNICAMENTE en este formato estricto:
 DECISIÓN: APROBADO o RECHAZADO
-RAZÓN: (explicación breve en español)`;
+RAZÓN: (explicación técnica de 1 línea en español)`;
 
         const aiResult = await model.generateContent([
           { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } },
