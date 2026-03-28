@@ -106,7 +106,7 @@ process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workf
 // --- FIN NUEVO ---
 
 (async () => {
-  const MAX_ATTEMPTS = 5;
+  const MAX_ATTEMPTS = 10;
   // 🌟 NUEVO: Variable fuera del bucle para recordar el vídeo en caso de fallo ajeno
   let currentVideoDoc = null;
 
