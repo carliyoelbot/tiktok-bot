@@ -586,7 +586,7 @@ RAZÓN: (explicación técnica de 1 línea en español)`;
       }
 
       console.log("¡Éxito total en la publicación!");
-      // 🔴 NUEVO: Avisar a Firestore de que el bot de publicación HA ARRANCADO
+      // 🔴 NUEVO: Avisar a Firestore de que el bot de publicación HA TERMINADO
       console.log("Notificando a Firestore: bot_status = idle");
       await db.doc('system_stats/counters').set({
         bot_status: 'idle'
