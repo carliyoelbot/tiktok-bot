@@ -249,6 +249,8 @@ MOTIVOS DE RECHAZO DIRECTO (Rechaza si detectas ALGO de esto):
 4. TOXICIDAD: Odio, acoso, insultos graves o discriminación.
 5. PROHIBIDOS CLÁSICOS: Desnudez, violencia real, drogas, maltrato animal.
 6. MARCAS DE AGUA: Logos visibles de Instagram, Reels, Kwai o Twitter.
+7. VIDEOS DE MENORES DE EDAD: Cualquier vídeo que muestre a menores de edad debe ser rechazado.
+8. VIDEOS QUE NO MUESTREN PERSONAS: Cualquier vídeo que no muestre personas debe ser rechazado. Siempre y cuando no sea un vídeo de un animal o un video bien editado.
 
 EXCEPCIÓN: Bailes, gameplays, memes inofensivos y humor absurdo están APROBADOS siempre que no toquen las reglas anteriores.
 Ante la duda de si algo es peligroso o spam, RECHÁZALO.
