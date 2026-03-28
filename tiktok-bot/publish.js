@@ -134,7 +134,11 @@ process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workf
         if (forceVideoId) {
           console.log(`[MODO FORZADO] Buscando vídeo específico: ${forceVideoId}`);
           currentVideoDoc = await db.collection('video_submissions').doc(forceVideoId).get();
-          if (!currentVideoDoc.exists) { console.log("El vídeo forzado no existe."); process.exit(1); }
+          if (!currentVideoDoc.exists) { 
+            console.log("El vídeo forzado no existe."); 
+            await db.doc('system_stats/counters').set({ bot_status: 'idle' }, { merge: true });
+            process.exit(1); 
+          }
         } else {
           console.log("Modo Sorteo: Buscando ganador aleatorio...");
           const randomVal = Math.random();
@@ -154,7 +158,11 @@ process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workf
               .get();
           }
 
-          if (snapshot.empty) { console.log("Urna vacía. Apagando."); process.exit(0); }
+          if (snapshot.empty) { 
+            console.log("Urna vacía. Apagando."); 
+            await db.doc('system_stats/counters').set({ bot_status: 'idle' }, { merge: true });
+            process.exit(0); 
+          }
           currentVideoDoc = snapshot.docs[0];
         }
       } else {
