@@ -85,6 +85,26 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 const fileManager = process.env.GEMINI_API_KEY ? new GoogleAIFileManager(process.env.GEMINI_API_KEY) : null;
 const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 
+// --- NUEVO: Manejo de cancelaciones abruptas (GitHub Actions Cancel, CTRL+C, etc) ---
+const cleanupAndExit = async (signal) => {
+  console.log(`\n🛑 Recibida señal de cancelación (${signal}). Limpiando estado en Firestore...`);
+  try {
+    await db.doc('system_stats/counters').set({
+      bot_status: 'idle'
+    }, { merge: true });
+    console.log("✅ Estado reseteado a 'idle'. Saliendo.");
+  } catch (e) {
+    console.error("❌ Error al intentar resetear el estado:", e.message);
+  }
+  process.exit(1);
+};
+
+// Escuchamos cuando GitHub Actions o el sistema intenta matar el proceso
+process.on('SIGINT', () => cleanupAndExit('SIGINT'));   // CTRL+C
+process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workflow o Docker
+
+// --- FIN NUEVO ---
+
 (async () => {
   const MAX_ATTEMPTS = 5;
   // 🌟 NUEVO: Variable fuera del bucle para recordar el vídeo en caso de fallo ajeno
