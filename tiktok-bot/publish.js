@@ -373,7 +373,7 @@ RAZÓN: (explicación técnica de 1 línea en español)`;
       ];
 
       while (Date.now() - startTime < maxWaitTimeMs) {
-        console.log(`Escanenando pantalla (${Math.floor((Date.now() - startTime) / 1000)}s)...`);
+        console.log(`Escaneando pantalla (${Math.floor((Date.now() - startTime) / 1000)}s)...`);
 
         if (page.url().includes('/tiktokstudio/content') || await page.locator(successSelectors).isVisible({ timeout: 2000 }).catch(() => false)) {
           console.log("¡Éxito detectado!");
@@ -381,17 +381,17 @@ RAZÓN: (explicación técnica de 1 línea en español)`;
           break;
         }
 
-        // --- NUEVO: Detección de aviso de restricción/violación ---
-        const restrictionText = [
-          'text=Content may be restricted',
-          'text=Violation reason',
-          'text=Contenido restringido',
-          'text=Motivo de la infracción',
-          'text=Unoriginal, low-quality',
-          'text=restringido'
-        ].join(', ');
+        // --- MEJORADO: Detección de aviso de restricción/violación ---
+        const restrictionChecks = await Promise.all([
+          page.getByText(/Content may be restricted/i).first().isVisible().catch(() => false),
+          page.getByText(/Violation reason/i).first().isVisible().catch(() => false),
+          page.getByText(/Unoriginal, low-quality/i).first().isVisible().catch(() => false),
+          page.getByText(/Replace video/i).first().isVisible().catch(() => false),
+          page.getByText(/Contenido restringido/i).first().isVisible().catch(() => false),
+          page.getByText(/Motivo de la infracción/i).first().isVisible().catch(() => false)
+        ]);
 
-        if (await page.locator(restrictionText).isVisible({ timeout: 1000 }).catch(() => false)) {
+        if (restrictionChecks.some(isVisible => isVisible)) {
           console.log("🚨 ¡AVISO DE RESTRICCIÓN DETECTADO POR TIKTOK! Marcando como rechazado.");
           isRestricted = true;
           break;
