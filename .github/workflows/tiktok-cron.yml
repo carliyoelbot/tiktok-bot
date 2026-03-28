@@ -62,3 +62,19 @@ jobs:
           name: debug-screenshot
           path: ./tiktok-bot/error-pantalla.png
           retention-days: 3
+
+      - name: 🚑 Rescate de Firestore (Forzar 'idle' tras cancelación o fallo)
+        # Se ejecuta SIEMPRE que el workflow haya fallado o sido cancelado
+        if: cancelled() || failure()
+        working-directory: ./tiktok-bot
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          node -e "
+            const admin = require('firebase-admin');
+            const svc = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            if (!admin.apps.length) admin.initializeApp({credential: admin.credential.cert(svc)});
+            admin.firestore().doc('system_stats/counters').set({ bot_status: 'idle' }, { merge: true })
+              .then(() => { console.log('✅ Estado reseteado a idle exitosamente tras la cancelación.'); process.exit(0); })
+              .catch((err) => { console.error('❌ Error al resetear estado:', err); process.exit(1); });
+          "
