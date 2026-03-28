@@ -90,6 +90,13 @@ const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GE
   // 🌟 NUEVO: Variable fuera del bucle para recordar el vídeo en caso de fallo ajeno
   let currentVideoDoc = null;
 
+  // 🔴 NUEVO: Avisar a Firestore de que el bot de publicación HA ARRANCADO
+  console.log("Notificando a Firestore: bot_status = running");
+  await db.doc('system_stats/counters').set({
+    bot_status: 'running',
+    bot_started_at: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true }).catch(e => console.error("Error al setear bot status running:", e));
+
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     console.log(`\n=== INICIANDO INTENTO ${attempt}/${MAX_ATTEMPTS} ===`);
     let browser;
