@@ -270,9 +270,10 @@ MOTIVOS DE RECHAZO DIRECTO (Rechaza si detectas ALGO de esto):
 6. MARCAS DE AGUA: Logos visibles de Instagram, Reels, Kwai o Twitter.
 7. VIDEOS DE MENORES DE EDAD: Cualquier vídeo que muestre a menores de edad debe ser rechazado.
 8. VIDEOS QUE NO MUESTREN PERSONAS: Cualquier vídeo que no muestre personas debe ser rechazado. Siempre y cuando no sea un vídeo de un animal o un video bien editado. Esos si estan permitidos.
-9. PROHIBIDO AUDIOS QUE SEAN SEXUALES O GEMIDOS: Cualquier video que contega audios distorsionados que parezcan gemidos, o audios que parezcan sexuales o deribados, no se tomará como meme.
+9. VIDEOS DE GAMEPLAYS: Cualquier video que muestre un gameplay o partes de juegos o videojuegos. Incluyendo videos de anime u o deribados.
+10. PROHIBIDO AUDIOS QUE SEAN SEXUALES O GEMIDOS: Cualquier video que contega audios distorsionados que parezcan gemidos, o audios que parezcan sexuales o deribados, no se tomará como meme.
 
-EXCEPCIÓN: Bailes, gameplays, memes inofensivos y humor absurdo están APROBADOS siempre que no toquen las reglas anteriores.
+EXCEPCIÓN: Bailes, memes inofensivos y humor absurdo están APROBADOS siempre que no toquen las reglas anteriores.
 Ante la duda de si algo es peligroso o spam, RECHÁZALO.
 
 Responde ÚNICAMENTE en este formato estricto:
