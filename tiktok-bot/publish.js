@@ -106,6 +106,17 @@ process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workf
 // --- FIN NUEVO ---
 
 (async () => {
+  // 🛡️ REVISAR MODO MANTENIMIENTO ANTES DE ARRANCAR
+  try {
+    const systemStatsSnap = await db.collection('system_stats').doc('counters').get();
+    if (systemStatsSnap.exists && systemStatsSnap.data().isCleaning === true) {
+      console.log("🛠️ MODO MANTENIMIENTO: La urna se está limpiando. El bot se apaga para evitar colisiones.");
+      process.exit(0);
+    }
+  } catch (err) {
+    console.warn("⚠️ No se pudo comprobar el modo mantenimiento:", err.message);
+  }
+
   const MAX_ATTEMPTS = 10;
   // 🌟 NUEVO: Variable fuera del bucle para recordar el vídeo en caso de fallo ajeno
   let currentVideoDoc = null;
@@ -131,16 +142,16 @@ process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workf
       if (!currentVideoDoc) {
         const forceVideoId = process.env.TARGET_VIDEO_ID;
 
+        console.log("Modo Sorteo: Buscando ganador aleatorio...");
+
         if (forceVideoId) {
-          console.log(`[MODO FORZADO] Buscando vídeo específico: ${forceVideoId}`);
           currentVideoDoc = await db.collection('video_submissions').doc(forceVideoId).get();
-          if (!currentVideoDoc.exists) { 
-            console.log("El vídeo forzado no existe."); 
+          if (!currentVideoDoc.exists) {
+            console.log("Urna vacía. Apagando.");
             await db.doc('system_stats/counters').set({ bot_status: 'idle' }, { merge: true });
-            process.exit(1); 
+            process.exit(0);
           }
         } else {
-          console.log("Modo Sorteo: Buscando ganador aleatorio...");
           const randomVal = Math.random();
           let snapshot = await db.collection('video_submissions')
             .where('status', '==', 'queued_for_tiktok')
@@ -158,10 +169,10 @@ process.on('SIGTERM', () => cleanupAndExit('SIGTERM')); // Cancelación de workf
               .get();
           }
 
-          if (snapshot.empty) { 
-            console.log("Urna vacía. Apagando."); 
+          if (snapshot.empty) {
+            console.log("Urna vacía. Apagando.");
             await db.doc('system_stats/counters').set({ bot_status: 'idle' }, { merge: true });
-            process.exit(0); 
+            process.exit(0);
           }
           currentVideoDoc = snapshot.docs[0];
         }
